@@ -1,0 +1,57 @@
+name: Isolated LifeOS knowledge-provider proof
+on:
+  push:
+    branches: [proof/lifeos-knowledge-provider-20260909]
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify exact non-sensitive model sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=proofs/lifeos-knowledge-provider-20260909
+          test "$(git hash-object "$root/provider.qnt")" = 379180928c6af528ac67d464a927544cd673737f
+          test "$(git hash-object "$root/provider_test.qnt")" = 713780f5265d6eab0972ec21dc4614411b16c5e6
+          test "$(git hash-object "$root/provider_mutant.qnt")" = d1c52ffb662463a33b33652ed8f6ad8d77d176ce
+      - name: Install pinned Quint
+        run: npm install --global @informalsystems/quint@0.32.0
+      - name: Execute positive proof and negative mutation check
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=proofs/lifeos-knowledge-provider-20260909
+          mkdir evidence
+          git rev-parse HEAD > evidence/runner-revision.txt
+          quint --version > evidence/quint-version.txt
+          sha256sum "$root"/*.qnt > evidence/model-hashes.txt
+          quint typecheck "$root/provider.qnt" 2>&1 | tee evidence/typecheck.log
+          quint typecheck "$root/provider_mutant.qnt" 2>&1 | tee evidence/mutant-typecheck.log
+          quint test "$root/provider_test.qnt" 2>&1 | tee evidence/tests.log
+          quint run "$root/provider.qnt" --invariant=invariant --max-samples=3000 --max-steps=6 2>&1 | tee evidence/run.log
+          printf '{"maxHeap":"-Xmx2G","workers":2}\n' > evidence/tlc-config.json
+          quint verify "$root/provider.qnt" --invariant=invariant --backend=tlc --tlc-config=evidence/tlc-config.json 2>&1 | tee evidence/verify.log
+          set +e
+          quint verify "$root/provider_mutant.qnt" --invariant=invariant --backend=tlc --tlc-config=evidence/tlc-config.json > evidence/mutant-verify.log 2>&1
+          mutant_status=$?
+          set -e
+          printf '%s\n' "$mutant_status" > evidence/mutant-verify.exit
+          if [ "$mutant_status" -eq 0 ]; then
+            cat evidence/mutant-verify.log
+            echo 'FAIL: deliberately broken acceptance logic escaped the invariant' >&2
+            exit 1
+          fi
+          echo 'PASS: the same invariant rejected deliberately broken acceptance logic' | tee evidence/non-vacuity.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: lifeos-knowledge-provider-proof
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
