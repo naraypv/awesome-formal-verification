@@ -19,12 +19,20 @@ env:
   APALACHE_URL: https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz
   APALACHE_SHA256: 91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1
   APALACHE_BYTES: "130948787"
+  JAVA_VERSION: "21.0.12.1+1"
 
 jobs:
   materialize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      - name: Provision pinned Temurin Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21.0.12.1+1"
+          check-latest: false
+
       - name: Download and authenticate public release assets
         shell: bash
         run: |
@@ -49,6 +57,15 @@ jobs:
 
           "$out/quint-linux-amd64" --version \
             | tee "$out/quint-version.log"
+          java -version 2>&1 | tee "$out/java-version.log"
+          grep -F '21.0.12.1' "$out/java-version.log"
+
+          java_parent="$(dirname "$JAVA_HOME")"
+          java_name="$(basename "$JAVA_HOME")"
+          tar --create --gzip \
+            --file "$out/temurin-21.0.12.1+1-linux-x64.tar.gz" \
+            --directory "$java_parent" "$java_name"
+
           {
             echo "run_id=$GITHUB_RUN_ID"
             echo "run_attempt=$GITHUB_RUN_ATTEMPT"
@@ -56,17 +73,22 @@ jobs:
             echo "runner_name=$RUNNER_NAME"
             echo "runner_arch=$RUNNER_ARCH"
             echo "runner_os=$RUNNER_OS"
+            echo "java_home_archive_root=$java_name"
             uname -a
             stat --format='%n %s bytes' \
-              "$out/quint-linux-amd64" "$out/apalache-0.56.1.tgz"
+              "$out/quint-linux-amd64" \
+              "$out/apalache-0.56.1.tgz" \
+              "$out/temurin-21.0.12.1+1-linux-x64.tar.gz"
             sha256sum \
-              "$out/quint-linux-amd64" "$out/apalache-0.56.1.tgz"
+              "$out/quint-linux-amd64" \
+              "$out/apalache-0.56.1.tgz" \
+              "$out/temurin-21.0.12.1+1-linux-x64.tar.gz"
           } | tee "$out/manifest.txt"
 
       - name: Retain authenticated public toolchain for private local execution
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: quint-0.32.0-apalache-0.56.1-linux-amd64
+          name: quint-0.32.0-apalache-0.56.1-temurin-21.0.12.1-linux-amd64
           path: ${{ runner.temp }}/quint-toolchain
           if-no-files-found: error
           retention-days: 1
