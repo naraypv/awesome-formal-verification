@@ -1,0 +1,73 @@
+name: Temporary pinned Quint toolchain materialization
+
+on:
+  push:
+    branches: [tmp/quint-toolchain-20260910]
+    paths:
+      - .github/workflows/materialize-quint-toolchain.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-quint-toolchain-20260910
+  cancel-in-progress: true
+
+env:
+  QUINT_URL: https://github.com/quint-co/quint/releases/download/v0.32.0/quint-linux-amd64
+  QUINT_SHA256: 939b64095b706017f2f202c6f99c860c40be7c31bddc2b98557316e50f42cd7f
+  APALACHE_URL: https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz
+  APALACHE_SHA256: 91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1
+  APALACHE_BYTES: "130948787"
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download and authenticate public release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/quint-toolchain"
+          mkdir -p "$out"
+
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --connect-timeout 20 --max-time 300 \
+            --output "$out/quint-linux-amd64" "$QUINT_URL"
+          printf '%s  %s\n' "$QUINT_SHA256" "$out/quint-linux-amd64" \
+            | sha256sum --check --strict
+          chmod 0555 "$out/quint-linux-amd64"
+
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --connect-timeout 20 --max-time 300 \
+            --output "$out/apalache-0.56.1.tgz" "$APALACHE_URL"
+          printf '%s  %s\n' "$APALACHE_SHA256" "$out/apalache-0.56.1.tgz" \
+            | sha256sum --check --strict
+          test "$(stat --format='%s' "$out/apalache-0.56.1.tgz")" \
+            = "$APALACHE_BYTES"
+
+          "$out/quint-linux-amd64" --version \
+            | tee "$out/quint-version.log"
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "sha=$GITHUB_SHA"
+            echo "runner_name=$RUNNER_NAME"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "runner_os=$RUNNER_OS"
+            uname -a
+            stat --format='%n %s bytes' \
+              "$out/quint-linux-amd64" "$out/apalache-0.56.1.tgz"
+            sha256sum \
+              "$out/quint-linux-amd64" "$out/apalache-0.56.1.tgz"
+          } | tee "$out/manifest.txt"
+
+      - name: Retain authenticated public toolchain for private local execution
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quint-0.32.0-apalache-0.56.1-linux-amd64
+          path: ${{ runner.temp }}/quint-toolchain
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
