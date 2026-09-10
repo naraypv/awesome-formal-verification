@@ -5,6 +5,7 @@ on:
     branches: [tmp/quint-toolchain-20260910]
     paths:
       - .github/workflows/materialize-quint-toolchain.yml
+      - scripts/install-formal-temurin.sh
 
 permissions:
   contents: read
@@ -19,19 +20,32 @@ env:
   APALACHE_URL: https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz
   APALACHE_SHA256: 91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1
   APALACHE_BYTES: "130948787"
-  JAVA_VERSION: "21.0.12.1+1"
 
 jobs:
   materialize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Provision pinned Temurin Java
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+      - name: Shallow read-only checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          distribution: temurin
-          java-version: "21.0.12.1+1"
-          check-latest: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Install and authenticate exact Temurin archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/quint-toolchain"
+          java_home="$RUNNER_TEMP/temurin-21.0.12.1_1"
+          mkdir -p "$out"
+          scripts/install-formal-temurin.sh "$java_home" 2>&1 \
+            | tee "$out/temurin-install.log"
+          printf 'JAVA_HOME=%s\n' "$java_home" >> "$GITHUB_ENV"
+          printf 'JAVA_HOME_21_X64=%s\n' "$java_home" >> "$GITHUB_ENV"
+          printf '%s/bin\n' "$java_home" >> "$GITHUB_PATH"
 
       - name: Download and authenticate public release assets
         shell: bash
@@ -40,14 +54,16 @@ jobs:
           out="$RUNNER_TEMP/quint-toolchain"
           mkdir -p "$out"
 
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+          curl --proto '=https' --tlsv1.2 --fail --location --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
             --connect-timeout 20 --max-time 300 \
             --output "$out/quint-linux-amd64" "$QUINT_URL"
           printf '%s  %s\n' "$QUINT_SHA256" "$out/quint-linux-amd64" \
             | sha256sum --check --strict
           chmod 0555 "$out/quint-linux-amd64"
 
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+          curl --proto '=https' --tlsv1.2 --fail --location --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
             --connect-timeout 20 --max-time 300 \
             --output "$out/apalache-0.56.1.tgz" "$APALACHE_URL"
           printf '%s  %s\n' "$APALACHE_SHA256" "$out/apalache-0.56.1.tgz" \
@@ -55,13 +71,18 @@ jobs:
           test "$(stat --format='%s' "$out/apalache-0.56.1.tgz")" \
             = "$APALACHE_BYTES"
 
+          test "$(command -v java)" = "$JAVA_HOME/bin/java"
           "$out/quint-linux-amd64" --version \
-            | tee "$out/quint-version.log"
-          java -version 2>&1 | tee "$out/java-version.log"
-          grep -F '21.0.12.1' "$out/java-version.log"
+            2>&1 | tee "$out/quint-version.log"
+          java -XshowSettings:properties -version \
+            2>&1 | tee "$out/java-version.log"
+          grep -F 'java.vendor = Eclipse Adoptium' "$out/java-version.log"
+          grep -F 'java.version = 21.0.12.1' "$out/java-version.log"
+          grep -F 'java.runtime.version = 21.0.12.1+1' \
+            "$out/java-version.log"
 
-          java_parent="$(dirname "$JAVA_HOME")"
-          java_name="$(basename "$JAVA_HOME")"
+          java_parent="$(dirname -- "$JAVA_HOME")"
+          java_name="$(basename -- "$JAVA_HOME")"
           tar --create --gzip \
             --file "$out/temurin-21.0.12.1+1-linux-x64.tar.gz" \
             --directory "$java_parent" "$java_name"
@@ -76,16 +97,20 @@ jobs:
             echo "java_home_archive_root=$java_name"
             uname -a
             stat --format='%n %s bytes' \
+              scripts/install-formal-temurin.sh \
               "$out/quint-linux-amd64" \
               "$out/apalache-0.56.1.tgz" \
               "$out/temurin-21.0.12.1+1-linux-x64.tar.gz"
             sha256sum \
+              scripts/install-formal-temurin.sh \
+              "$JAVA_HOME/bin/java" \
               "$out/quint-linux-amd64" \
               "$out/apalache-0.56.1.tgz" \
               "$out/temurin-21.0.12.1+1-linux-x64.tar.gz"
           } | tee "$out/manifest.txt"
 
       - name: Retain authenticated public toolchain for private local execution
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: quint-0.32.0-apalache-0.56.1-temurin-21.0.12.1-linux-amd64
